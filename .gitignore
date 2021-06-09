@@ -127,3 +127,6 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+dingtalk_robot.py
+debug.ipynb
+sync.bat

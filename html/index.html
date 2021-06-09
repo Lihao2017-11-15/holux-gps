@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <meta name="viewport" content="initial-scale=1.0, user-scalable=no" />
+    <style type="text/css">
+        body,
+        html {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            margin: 0;
+            font-family: "微软雅黑";
+        }
+
+        #allmap {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            margin: 0;
+            font-family: "微软雅黑";
+        }
+
+        #msg {
+            background: #000;
+            width: 100%;
+        }
+
+        #msg div {
+            display: flex;
+        }
+
+        #msg div span {
+            background: slateblue;
+            border: 1px solid #CCC;
+            color: #fff;
+            margin: 0.2em;
+            padding: 0.2em;
+            flex-grow: 1;
+            /*铺满剩余空间*/
+        }
+    </style>
+    <script src="generateUUID.js"></script>
+    <script src="reconnecting-websocket.min.js"></script>
+    <script src="http://libs.baidu.com/jquery/1.9.0/jquery.js"></script>
+    <script src="http://api.map.baidu.com/api?v=3.0&ak=6myEVQSqYQsazzCWGbqhXlByoMBQ6Vpv"></script>
+    <script src="http://developer.baidu.com/map/jsdemo/demo/convertor.js"></script>
+
+    <title>车辆运行轨迹测试</title>
+</head>
+
+<body>
+    <div id="msg"></div>
+    <input id="allmap_value" value="" style="display:none;">
+    <div id="allmap"></div>
+</body>
+
+</html>
+
+<script type="text/javascript">
+    var last_heart = new Date().getTime()
+    var client_id = localStorage.getItem("ws_uuid") || generateUUID()
+    localStorage.setItem("ws_uuid", client_id)
+
+    var connected = false;
+    var long, last_long, baidu_long, lat, last_lat, baidu_lat, heart_handler
+    var list = [];
+    // 百度地图API功能
+    var map = new BMap.Map("allmap");    // 创建Map实例
+    var myBeginIcon = new BMap.Icon("http://e.hiphotos.baidu.com/image/pic/item/7e3e6709c93d70cfaf72bca2f0dcd100bba12b90.jpg", new BMap.Size(25, 37), { imageOffset: new BMap.Size(0, 0) });//人
+    var car = "";
+    // var ws = new WebSocket('ws://localhost:8000/ws')
+    var ws = new ReconnectingWebSocket('ws://localhost:8000/ws')
+    ws.onopen = function (evt) {
+        console.log('WebSocket已连接')
+        send("login")
+        send("startupdate")
+        // clearInterval(heart_handler)
+        // heart_handler = setInterval(() => {
+        //     send("ping")
+        //     console.log("ping")
+        //     if (new Date().getTime() - last_heart > 15 * 1000) {
+        //         ws.close()
+        //         ws = new WebSocket('ws://localhost:8000/ws')
+        //         console.log('reconnecting...')
+        //     }
+        // }, 10 * 1000);
+    }
+    ws.onmessage = function (evt) {
+        connected = true
+        let data = JSON.parse(evt.data)
+        if (data.ping == "pong") {
+            last_heart = new Date().getTime()
+            console.log('心跳正常')
+            return
+        }
+        let htmlstr = "<div class='row1'>" +
+            "<span>日期：" + data.日期 + "</span>" +
+            "<span>时间：" + data.时间 + "</span>" +
+            "<span>GPS状态：" + data.GPS状态 + "</span>" +
+            "<span>经度：" + data.经度[0] + "°" + data.经度[1] + "′" + data.经度[2] + "″" + data.经度[3] + "</span>" +
+            "<span>纬度：" + data.纬度[0] + "°" + data.纬度[1] + "′" + data.纬度[2] + "″" + data.纬度[3] + "</span>" +
+            "<span>速度：" + data.速度 + "</span>" +
+            "</div><div class='row2'>" +
+            "<span>PDOP综合位置精度因子：" + data.PDOP综合位置精度因子 + "</span>" +
+            "<span>HDOP水平精度因子：" + data.HDOP水平精度因子 + "</span>" +
+            "<span>VDOP垂直精度因子：" + data.VDOP垂直精度因子 + "</span>" +
+            "<span>卫里数量：" + data.卫里数量 + "</span>" +
+            "<span>海拔：" + data.海拔 + "</span>" +
+            "</div>"
+        $('#msg').html(htmlstr)
+        // console.log(data)
+        long = data.经度[0] + "." + data.经度[1] + data.经度[2].replace(".", "")
+        lat = data.纬度[0] + "." + data.纬度[1] + data.纬度[2].replace(".", "")
+        if (last_long == long && last_lat == lat) {
+            console.log('位置未改变，不更新地图。')
+            return
+        }
+        if (Math.abs(last_long - long) >= 1 || Math.abs(last_lat - lat) >= 1) {
+            console.log('坐标异常，不更新地图。')
+            return
+        }
+        last_long = long; last_lat = lat
+
+        //GPS坐标转百度地图坐标的方法
+        //https://blog.csdn.net/fengchao03/article/details/77883121
+        baidu_long = parseFloat(data.经度[0]) + (parseFloat(data.经度[1]) + parseFloat(data.经度[2]) / 60) / 60
+        baidu_lat = parseFloat(data.纬度[0]) + (parseFloat(data.纬度[1]) + parseFloat(data.纬度[2]) / 60) / 60
+        let gpsPoint = new BMap.Point(baidu_long, baidu_lat);
+        BMap.Convertor.translate(gpsPoint, 0, translateCallback);
+    }
+    ws.onclose = function (evt) {
+        connected = false;
+    }
+    function send(cmd) {
+        let _cmd = JSON.stringify({ "id": client_id, "cmd": cmd })
+        ws.send(_cmd)
+    }
+    // 监听窗口关闭事件，当窗口关闭时，主动去关闭websocket连接，防止连接还没断开就关闭窗口，server端会抛异常。
+    window.onbeforeunload = function () {
+        ws.close();
+    }
+    function show_mycat(address, long, lat) {
+        if (car) map.removeOverlay(car)
+        label = new BMap.Label(address, { offset: new BMap.Size(-20, -20) });
+        car = new BMap.Marker(new BMap.Point(long, lat));
+        car.setLabel(label);
+        map.addOverlay(car);
+        map.panTo(new BMap.Point(long, lat));
+    }
+    //显示原始路线
+    function drawGreenLine(i, color, weitht) {
+        if (i < 0 || i > list.length - 1) return
+        var polyline = new BMap.Polyline([
+            new BMap.Point(list[i].Long, list[i].Lat),//起始点的经纬度
+            new BMap.Point(list[i + 1].Long, list[i + 1].Lat)//终点的经纬度
+        ], {
+            strokeColor: color,//设置颜色
+            strokeWeight: weitht, //宽度
+            strokeOpacity: 1
+        });//透明度
+        map.addOverlay(polyline);
+    }
+    //获取路线
+    function drawGreenAddress(i, color, weitht) {
+        if (i % 2 == 0) { //不能太频繁请求百度地址,这里可能会改大
+            var geoc = new BMap.Geocoder();
+            geoc.getLocation(new BMap.Point(list[i].Long, list[i].Lat), function (rs) {
+                var addComp = rs.addressComponents;
+                address = addComp.province + addComp.city + addComp.district + addComp.street + addComp.streetNumber;
+                $("#allmap_value").val(address)
+            });
+        }
+    }
+    function lineAddress(i, color, weitht) {
+        drawGreenLine(i, color, weitht)
+        drawGreenAddress(i, color, weitht)
+    }
+    function drawIcon() {
+        let carMk = new BMap.Marker(
+            new BMap.Point(list[0].Long, list[0].Lat),//起始点的经纬度
+            { icon: myBeginIcon });
+        map.addOverlay(carMk);
+    }
+    function play(long, lat) {
+        lineAddress(list.length - 2, "red", 2);
+        //显示地址
+        show_mycat($("#allmap_value").val(), long, lat);
+    }
+    //坐标转换完之后的回调函数
+    //https://www.cnblogs.com/limeiky/p/5818601.html
+    translateCallback = function (point) {
+        // console.log("转化为百度坐标为：" + point.lng + "," + point.lat);
+        list.push({
+            Long: point.lng,
+            Lat: point.lat,
+        })
+        if (list.length == 1) {
+            drawGreenAddress(0, "red", 4);
+            map.addControl(new BMap.NavigationControl());
+            map.addControl(new BMap.ScaleControl());
+            map.addControl(new BMap.OverviewMapControl({ isOpen: true }));
+            map.centerAndZoom(new BMap.Point(list[0].Long, list[0].Lat), 15);  // 初始化地图,设置中心点坐标和地图级别
+            map.addControl(new BMap.MapTypeControl());   //添加地图类型控件
+            map.enableScrollWheelZoom(true);     //开启鼠标滚轮缩放
+            // setTimeout(drawIcon, 500);
+            drawIcon();
+        }
+        else {
+            play(point.lng, point.lat)
+        }
+        if (list.length > 10) {
+            list.shift()
+        }
+        // console.log('坐标数量：', list.length)
+    }
+</script>
